@@ -11,15 +11,15 @@ A comprehensive Formula 1 notification system built with Python, Green API, Jolp
 
 ## System Components & Workflows
 
-### 1. Monday Calendar Bot (`f1_callender_bot.py`)
+### 1. Monday Calendar Bot (`callender_bot.py`)
 * **Execution**: Automated via GitHub Actions (Every Monday at 09:00 UTC).
 * **Functionality**: Fetches the next upcoming Grand Prix. If the race takes place within 7 days, it parses session timings (Practice, Sprint, Qualifying, Race), converts them to `Europe/Lisbon` time, sends a structured message to WhatsApp, and pins it for everyone.
 
-### 2. Saturday Grid Bot (`f1_grid_bot.py`)
+### 2. Saturday Grid Bot (`grid_bot.py`)
 * **Execution**: Automated via GitHub Actions (Every Saturday at 17:00 UTC).
 * **Functionality**: Validates if qualifying is scheduled for the current day. Once official results are published by the API, it retrieves the starting grid, formats the top positions with drivers and constructors, sends the update to WhatsApp, and pins the message.
 
-### 3. Live Race Bot (`f1_live_race_bot.py`)
+### 3. Live Race Bot (`live_bot.py`)
 * **Execution**: Local execution during race sessions.
 * **Functionality**: Connects to official F1 live timing servers using FastF1's SignalR client (`f1_live.txt`). It monitors real-time events and sends instant alerts to WhatsApp for:
   * **Track Status**: Safety Car ($\text{Status 4}$), Red Flag ($\text{Status 5}$), and Track Clear ($\text{Status 1}$).
