@@ -31,7 +31,7 @@ Configure the following variables locally in a `.env` file or securely under Git
 
 * `ID_INSTANCE`: Your Green API instance ID.
 * `API_TOKEN`: Your Green API token.
-* `CHAT_ID`: The target WhatsApp group chat ID (e.g., `120363424796569912@g.us`).
+* `CHAT_ID`: The target WhatsApp group chat ID.
 
 ## Setup & Installation
 
