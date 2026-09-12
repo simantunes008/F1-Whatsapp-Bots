@@ -22,4 +22,8 @@ jobs:
           pip install requests
 
       - name: Executar o bot do F1
+        env:
+          ID_INSTANCE: ${{ secrets.ID_INSTANCE }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python f1_callender_bot.py

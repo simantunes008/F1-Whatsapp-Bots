@@ -1,10 +1,14 @@
+import os
+from dotenv import load_dotenv
 import requests
 from datetime import datetime, timezone, timedelta
 import zoneinfo
 
-id_instance = "710722735086"
-api_token = "79d223920d8b4595b06237b58943208b58ad458e29c949b09b"
-chat_id = "120363424796569912@g.us"
+load_dotenv()
+
+id_instance = os.getenv("ID_INSTANCE")
+api_token = os.getenv("API_TOKEN")
+chat_id = os.getenv("CHAT_ID")
 host = "https://7107.api.greenapi.com"
 
 f1_url = "https://api.jolpi.ca/ergast/f1/current/next.json"
@@ -21,21 +25,17 @@ try:
 
     race = response.json()['MRData']['RaceTable']['Races'][0]
     race_name = race['raceName']
-    race_date_str = race['date'] # Ex: '2026-09-20'
+    race_date_str = race['date']
     
-    # --- VERIFICAÇÃO: A corrida é nos próximos 7 dias? ---
-    hoje = datetime.now(lisbon_tz).date()
-    data_corrida = datetime.strptime(race_date_str, "%Y-%m-%d").date()
+    now = datetime.now(lisbon_tz).date()
+    race_date = datetime.strptime(race_date_str, "%Y-%m-%d").date()
     
-    dias_ate_corrida = (data_corrida - hoje).days
+    days_until_race = (race_date - now).days
     
-    # Se faltarem mais do que 7 dias (ou se já tiver passado), o script pára aqui
-    if not (0 <= dias_ate_corrida <= 7):
-        print(f"A próxima corrida ({race_name}) é daqui a {dias_ate_corrida} dias. Nenhuma mensagem enviada hoje.")
+    if not (0 <= days_until_race <= 7):
+        print(f"Next race is in {days_until_race} days. No message sent")
         exit()
-    # ---------------------------------------------------
 
-    # Construir a mensagem com todos os treinos
     message = f"*{race_name}*\n\n"
     
     if 'FirstPractice' in race:
@@ -57,18 +57,18 @@ try:
     
     if resp.status_code == 200:
         id_mensagem = resp.json().get("idMessage")
-        print("Mensagem enviada com sucesso!")
+        print("Message sent")
 
         pin_url = f"{host}/waInstance{id_instance}/pinMessage/{api_token}"
         pin_payload = {"chatId": chat_id, "idMessage": id_mensagem, "pin": True, "pinType": "pinForEveryone"}
         pin_resp = requests.post(pin_url, json=pin_payload)
         
         if pin_resp.status_code == 200:
-            print("Mensagem fixada no grupo com sucesso!")
+            print("Message pinned in the group")
         else:
-            print(f"Aviso: Não foi possível fixar. O bot é admin? Erro: {pin_resp.text}")
+            print(f"Could not pin the message. Error: {pin_resp.text}")
     else:
-        print(f"Erro ao enviar: {resp.text}")
+        print(f"Error: {resp.text}")
 
 except Exception as e:
-    print(f"Ocorreu um erro: {e}")
+    print(f"Error: {e}")
