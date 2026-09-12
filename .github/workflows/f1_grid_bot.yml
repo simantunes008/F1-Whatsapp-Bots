@@ -1,0 +1,29 @@
+name: F1 Grid WhatsApp Bot
+
+on:
+  schedule:
+    - cron: '0 17 * * 6'
+  workflow_dispatch:
+
+jobs:
+  run-grid-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aceder ao repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependências
+        run: |
+          pip install requests python-dotenv
+
+      - name: Executar o bot da grelha
+        env:
+          ID_INSTANCE: ${{ secrets.ID_INSTANCE }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python f1_grid_bot.py
