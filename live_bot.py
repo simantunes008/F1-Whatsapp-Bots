@@ -1,4 +1,5 @@
 import os
+import json
 from dotenv import load_dotenv
 import requests
 import asyncio
@@ -33,7 +34,7 @@ def init_fastf1():
     cliente = SignalRClient(ficheiro_dados, debug=False)
     loop.run_until_complete(cliente.async_start())
 
-def race_monitor():
+def live_monitor():
     print("A aguardar dados da corrida...")
     time.sleep(5) 
     
@@ -47,24 +48,41 @@ def race_monitor():
                 time.sleep(1) 
                 continue
                 
+            # 1. Monitorizar Estado da Pista (Safety Car, Red Flag, etc.)
             if "TrackStatus" in linha:
                 if '"Status":"4"' in linha and estado_pista_anterior != "4":
-                    print("⚠️ DETETADO SAFETY CAR!")
-                    send_msg("⚠️ *SAFETY CAR NA PISTA!* 🟡")
+                    send_msg("*SAFETY CAR NA PISTA!*")
                     estado_pista_anterior = "4"
                     
                 elif '"Status":"5"' in linha and estado_pista_anterior != "5":
-                    print("🔴 DETETADA BANDEIRA VERMELHA!")
-                    send_msg("🔴 *BANDEIRA VERMELHA!* Sessão interrompida.")
+                    send_msg("*BANDEIRA VERMELHA!* Sessão interrompida.")
                     estado_pista_anterior = "5"
                     
                 elif '"Status":"1"' in linha and estado_pista_anterior != "1":
-                    print("🟢 PISTA LIMPA!")
-                    send_msg("🟢 *PISTA LIMPA!* Corrida retomada.")
+                    send_msg("*PISTA LIMPA!* Corrida retomada.")
                     estado_pista_anterior = "1"
+
+            # 2. Monitorizar Mensagens da Direção de Prova
+            elif "RaceControlMessages" in linha:
+                try:
+                    partes = linha.split(":", 1)
+                    if len(partes) > 1:
+                        dados_json = json.loads(partes[1])
+                        
+                        for msg_obj in dados_json.get("Messages", []):
+                            texto_mensagem = msg_obj.get("Message", "")
+                            
+                            if "INVESTIGATION" in texto_mensagem.upper():
+                                send_msg(f"*Investigação:* {texto_mensagem}")
+                                
+                            elif "PENALTY" in texto_mensagem.upper():
+                                send_msg(f"*Penalização:* {texto_mensagem}")
+                                
+                except Exception as e:
+                    print(f"Erro ao processar Race Control: {e}")
 
 # Iniciar threads
 thread = threading.Thread(target=init_fastf1)
 thread.start()
 
-race_monitor()
+live_monitor()

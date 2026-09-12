@@ -1,31 +1,37 @@
 # F1 WhatsApp Automation Bot
 
-An automated system built with Python, Green API, and the Jolpica F1 API that delivers Formula 1 race weekend schedules and starting grids directly to a WhatsApp group via GitHub Actions.
+A comprehensive Formula 1 notification system built with Python, Green API, Jolpica F1 API, and FastF1 that automates weekend schedules, starting grids, and real-time race events directly to a WhatsApp group.
 
 ## Tech Stack
 
 * **Language**: Python 3.10
 * **Messaging Gateway**: Green API
-* **Data Source**: Jolpica F1 API
+* **Data Sources**: Jolpica F1 API & FastF1
 * **Automation & CI/CD**: GitHub Actions
 
-## Automated Workflows
+## System Components & Workflows
 
 ### 1. Monday Calendar Bot (`f1_callender_bot.py`)
-* **Schedule**: Runs every Monday at 09:00 UTC (10:00 Lisbon time).
-* **Functionality**: Fetches the next upcoming Grand Prix. If the race takes place within the next 7 days, it formats all session schedules (Practice, Sprint, Qualifying, and Race) converted to `Europe/Lisbon` time, sends the message to WhatsApp, and pins it for everyone.
+* **Execution**: Automated via GitHub Actions (Every Monday at 09:00 UTC).
+* **Functionality**: Fetches the next upcoming Grand Prix. If the race takes place within 7 days, it parses session timings (Practice, Sprint, Qualifying, Race), converts them to `Europe/Lisbon` time, sends a structured message to WhatsApp, and pins it for everyone.
 
 ### 2. Saturday Grid Bot (`f1_grid_bot.py`)
-* **Schedule**: Runs every Saturday at 17:00 UTC (18:00 Lisbon time).
-* **Functionality**: Validates if today is a qualifying day for the current weekend. Once official results are published by the API, it retrieves the starting grid, formats the top positions with driver names and constructors, sends the update to WhatsApp, and pins the message.
+* **Execution**: Automated via GitHub Actions (Every Saturday at 17:00 UTC).
+* **Functionality**: Validates if qualifying is scheduled for the current day. Once official results are published by the API, it retrieves the starting grid, formats the top positions with drivers and constructors, sends the update to WhatsApp, and pins the message.
+
+### 3. Live Race Bot (`f1_live_race_bot.py`)
+* **Execution**: Local execution during race sessions.
+* **Functionality**: Connects to official F1 live timing servers using FastF1's SignalR client (`f1_live.txt`). It monitors real-time events and sends instant alerts to WhatsApp for:
+  * **Track Status**: Safety Car ($\text{Status 4}$), Red Flag ($\text{Status 5}$), and Track Clear ($\text{Status 1}$).
+  * **Race Control**: Detailed text notifications for investigations and penalties.
 
 ## Environment Variables
 
-To run the project locally or via GitHub Actions, configure the following secrets/variables:
+Configure the following variables locally in a `.env` file or securely under GitHub Repository **Settings > Secrets and variables > Actions**:
 
 * `ID_INSTANCE`: Your Green API instance ID.
 * `API_TOKEN`: Your Green API token.
-* `CHAT_ID`: The target WhatsApp group chat ID.
+* `CHAT_ID`: The target WhatsApp group chat ID (e.g., `120363424796569912@g.us`).
 
 ## Setup & Installation
 
