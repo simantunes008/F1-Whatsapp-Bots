@@ -1,6 +1,6 @@
 # F1 WhatsApp Automation Bot
 
-A comprehensive Formula 1 notification system built with Python, Green API, Jolpica F1 API, and FastF1 that automates weekend schedules, starting grids, and real-time race events directly to a WhatsApp group.
+A comprehensive Formula 1 notification system built with Python, Green API, Jolpica F1 API, and FastF1 that automates weekend schedules, starting grids, dynamic posters, and real-time race events directly to a WhatsApp group.
 
 ## Tech Stack
 
@@ -9,11 +9,28 @@ A comprehensive Formula 1 notification system built with Python, Green API, Jolp
 * **Data Sources**: Jolpica F1 API & FastF1
 * **Automation & CI/CD**: GitHub Actions
 
+## Project Structure
+
+```text
+F1BOT/
+├── .github/workflows/
+│   ├── calendar_bot.yml
+│   └── grid_bot.yml
+├── posters/             # Race posters named by circuitId (e.g., zandvoort.jpg)
+├── .env
+├── .gitignore
+├── calendar_bot.py
+├── grid_bot.py
+├── live_bot.py
+├── requirements.txt
+└── README.md
+```
+
 ## System Components & Workflows
 
-### 1. Monday Calendar Bot (`callender_bot.py`)
+### 1. Monday Calendar Bot (`calendar_bot.py`)
 * **Execution**: Automated via GitHub Actions (Every Monday at 09:00 UTC).
-* **Functionality**: Fetches the next upcoming Grand Prix. If the race takes place within 7 days, it parses session timings (Practice, Sprint, Qualifying, Race), converts them to `Europe/Lisbon` time, sends a structured message to WhatsApp, and pins it for everyone.
+* **Functionality**: Fetches the next upcoming Grand Prix. If the race takes place within 7 days, it parses session timings (Practice, Sprint Qualifying, Sprint, Qualifying, Race), converts them to `Europe/Lisbon` time, attaches the circuit poster from the repo, sends a formatted message to WhatsApp, and pins it for everyone.
 
 ### 2. Saturday Grid Bot (`grid_bot.py`)
 * **Execution**: Automated via GitHub Actions (Every Saturday at 17:00 UTC).
@@ -21,9 +38,10 @@ A comprehensive Formula 1 notification system built with Python, Green API, Jolp
 
 ### 3. Live Race Bot (`live_bot.py`)
 * **Execution**: Local execution during race sessions.
-* **Functionality**: Connects to official F1 live timing servers using FastF1's SignalR client (`f1_live.txt`). It monitors real-time events and sends instant alerts to WhatsApp for:
-  * **Track Status**: Safety Car ($\text{Status 4}$), Red Flag ($\text{Status 5}$), and Track Clear ($\text{Status 1}$).
-  * **Race Control**: Detailed text notifications for investigations and penalties.
+* **Prerequisites**: Active **F1TV Access, Pro, or Premium** subscription (required by FastF1 for live telemetry). Authentication is done via browser flow on first run and cached locally.
+* **Functionality**: Connects to official F1 live timing servers using FastF1's SignalR client and streams events to `f1_live.txt`. A parallel log-tailing parser monitors the stream and sends instant alerts for:
+  * **Track Status**: Safety Car, Red Flag, and Track Clear.
+  * **Race Control**: Filtered real-time notifications for investigations and penalties.
 
 ## Environment Variables
 
@@ -37,5 +55,16 @@ Configure the following variables locally in a `.env` file or securely under Git
 
 1. Clone the repository:
    ```bash
-   git clone [https://github.com/your-username/F1Bot.git](https://github.com/your-username/F1Bot.git)
-   cd F1Bot
+   git clone [https://github.com/simantunes008/F1-Whatsapp-Bots.git](https://github.com/simantunes008/F1-Whatsapp-Bots.git)
+   cd F1-Whatsapp-Bots
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Run the live bot locally:
+   ```bash
+   python live_bot.py
+   ```
