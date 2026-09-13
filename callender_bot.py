@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import zoneinfo
 
 load_dotenv()
@@ -20,7 +20,7 @@ def converter_hora(data_str, hora_str):
     return dt_local.strftime("%d/%m (%H:%M)")
 
 try:
-    response = requests.get(f1_url)
+    response = requests.get(f1_url, timeout=10)
     response.raise_for_status()
 
     race = response.json()['MRData']['RaceTable']['Races'][0]
@@ -40,20 +40,22 @@ try:
     
     if 'FirstPractice' in race:
         message += f"*Treino 1:* {converter_hora(race['FirstPractice']['date'], race['FirstPractice']['time'])}\n"
-    if 'SecondPractice' in race:
+    if 'SprintQualifying' in race:
+        message += f"*Qualificação Sprint:* {converter_hora(race['SprintQualifying']['date'], race['SprintQualifying']['time'])}\n"
+    elif 'SecondPractice' in race:
         message += f"*Treino 2:* {converter_hora(race['SecondPractice']['date'], race['SecondPractice']['time'])}\n"
-    if 'ThirdPractice' in race:
-        message += f"*Treino 3:* {converter_hora(race['ThirdPractice']['date'], race['ThirdPractice']['time'])}\n"
     if 'Sprint' in race:
         message += f"*Sprint:* {converter_hora(race['Sprint']['date'], race['Sprint']['time'])}\n"
+    elif 'ThirdPractice' in race:
+        message += f"*Treino 3:* {converter_hora(race['ThirdPractice']['date'], race['ThirdPractice']['time'])}\n"
     if 'Qualifying' in race:
         message += f"*Qualificação:* {converter_hora(race['Qualifying']['date'], race['Qualifying']['time'])}\n"
         
-    message += f"*Corrida:* {converter_hora(race['date'], race['time'])}"
+    message += f"*Corrida:* {converter_hora(race['date'], race['time'])}\n\n*Assiste em:* https://formula1streams.plus/"
 
     send_url = f"{host}/waInstance{id_instance}/sendMessage/{api_token}"
     payload = {"chatId": chat_id, "message": message}
-    resp = requests.post(send_url, json=payload)
+    resp = requests.post(send_url, json=payload, timeout=10)
     
     if resp.status_code == 200:
         id_mensagem = resp.json().get("idMessage")
@@ -61,7 +63,7 @@ try:
 
         pin_url = f"{host}/waInstance{id_instance}/pinMessage/{api_token}"
         pin_payload = {"chatId": chat_id, "idMessage": id_mensagem, "pin": True, "pinType": "pinForEveryone"}
-        pin_resp = requests.post(pin_url, json=pin_payload)
+        pin_resp = requests.post(pin_url, json=pin_payload, timeout=10)
         
         if pin_resp.status_code == 200:
             print("Message pinned in the group")

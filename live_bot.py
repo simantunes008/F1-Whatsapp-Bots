@@ -2,7 +2,6 @@ import os
 import json
 from dotenv import load_dotenv
 import requests
-import asyncio
 import time
 import threading
 from fastf1.livetiming.client import SignalRClient
@@ -28,15 +27,17 @@ def send_msg(mensagem):
 
 def init_fastf1():
     print("A conectar aos servidores da F1 em direto...")
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
     cliente = SignalRClient(ficheiro_dados, debug=False)
-    loop.run_until_complete(cliente.async_start())
+    cliente.start()
 
 def live_monitor():
-    print("A aguardar dados da corrida...")
-    time.sleep(5) 
+    print("A aguardar criação do ficheiro de dados...")
+    
+    while not os.path.exists(ficheiro_dados):
+        time.sleep(1)
+        
+    print("Ficheiro detetado! A monitorizar a corrida...")
+    time.sleep(2)
     
     with open(ficheiro_dados, "r", encoding="utf-8") as f:
         f.seek(0, 2)
