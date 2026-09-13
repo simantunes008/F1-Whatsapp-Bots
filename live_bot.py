@@ -21,7 +21,7 @@ def send_msg(mensagem):
     resp = requests.post(send_url, json=payload)
     
     if resp.status_code == 200:
-        print("Alerta ao vivo enviado com sucesso!")
+        print(f"Alerta enviado: {mensagem}")
     else:
         print(f"Erro ao enviar alerta: {resp.text}")
 
@@ -39,6 +39,8 @@ def live_monitor():
     print("Ficheiro detetado! A monitorizar a corrida...")
     time.sleep(2)
     
+    mensagens_vistas = set()
+    
     with open(ficheiro_dados, "r", encoding="utf-8") as f:
         f.seek(0, 2)
         estado_pista_anterior = None
@@ -49,7 +51,7 @@ def live_monitor():
                 time.sleep(1) 
                 continue
                 
-            # 1. Monitorizar Estado da Pista (Safety Car, Red Flag, etc.)
+            # 1. Monitorizar Estado da Pista
             if "TrackStatus" in linha:
                 if '"Status":"4"' in linha and estado_pista_anterior != "4":
                     send_msg("*SAFETY CAR NA PISTA!*")
@@ -63,27 +65,34 @@ def live_monitor():
                     send_msg("*PISTA LIMPA!* Corrida retomada.")
                     estado_pista_anterior = "1"
 
-            # 2. Monitorizar Mensagens da Direção de Prova
+            # 2. Monitorizar Direção de Prova
             elif "RaceControlMessages" in linha:
                 try:
                     partes = linha.split(":", 1)
                     if len(partes) > 1:
-                        dados_json = json.loads(partes[1])
+                        dados_json = json.loads(partes[1].strip())
                         
                         for msg_obj in dados_json.get("Messages", []):
                             texto_mensagem = msg_obj.get("Message", "")
                             
-                            if "INVESTIGATION" in texto_mensagem.upper():
+                            if texto_mensagem in mensagens_vistas:
+                                continue
+                            texto_upper = texto_mensagem.upper()
+                            
+                            if "INVESTIGATION" in texto_upper:
                                 send_msg(f"*Investigação:* {texto_mensagem}")
+                                mensagens_vistas.add(texto_mensagem)
                                 
-                            elif "PENALTY" in texto_mensagem.upper():
+                            elif "PENALTY" in texto_upper:
                                 send_msg(f"*Penalização:* {texto_mensagem}")
+                                mensagens_vistas.add(texto_mensagem)
                                 
+                except json.JSONDecodeError:
+                    pass
                 except Exception as e:
                     print(f"Erro ao processar Race Control: {e}")
 
-# Iniciar threads
-thread = threading.Thread(target=init_fastf1)
+thread = threading.Thread(target=init_fastf1, daemon=True)
 thread.start()
 
 live_monitor()
