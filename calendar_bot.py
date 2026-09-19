@@ -1,8 +1,10 @@
-"""Envia o calendário do fim de semana de GP para o grupo de WhatsApp.
+"""Send the Grand Prix weekend schedule to the WhatsApp group.
 
-Sai com 0 quando não há nada a enviar e com 1 em caso de erro, para que o
-GitHub Actions marque a execução como falhada e notifique. Antes, qualquer
-falha ficava escondida num job verde.
+Exits 0 when there is nothing to send and 1 on error, so that GitHub Actions
+marks the run as failed and notifies. Previously any failure was hidden
+inside a green job.
+
+Message text stays in Portuguese: it is what the group reads.
 """
 
 import sys
@@ -12,69 +14,66 @@ from datetime import datetime, timezone
 import f1_api
 import whatsapp
 
-LISBOA = zoneinfo.ZoneInfo("Europe/Lisbon")
-JANELA_DIAS = 7
-LINK_STREAM = "https://formula1streams.plus/"
+LISBON = zoneinfo.ZoneInfo("Europe/Lisbon")
+WINDOW_DAYS = 7
+STREAM_LINK = "https://formula1streams.plus/"
 
 
-def converter_hora(data_str, hora_str):
-    """Converte data e hora UTC da API para hora de Lisboa."""
-    dt_utc = datetime.strptime(
-        f"{data_str}T{hora_str}", "%Y-%m-%dT%H:%M:%SZ"
+def format_time(date_str, time_str):
+    """Convert a UTC date and time from the API into Lisbon local time."""
+    utc = datetime.strptime(
+        f"{date_str}T{time_str}", "%Y-%m-%dT%H:%M:%SZ"
     ).replace(tzinfo=timezone.utc)
-    return dt_utc.astimezone(LISBOA).strftime("%d/%m (%H:%M)")
+    return utc.astimezone(LISBON).strftime("%d/%m (%H:%M)")
 
 
-def linha_sessao(corrida, chave, etiqueta):
-    """Linha formatada de uma sessão, ou vazia se o fim de semana não a tiver."""
-    sessao = corrida.get(chave)
-    if not sessao:
+def session_line(race, key, label):
+    """Formatted line for one session, or empty if the weekend lacks it."""
+    session = race.get(key)
+    if not session:
         return ""
-    return f"*{etiqueta}:* {converter_hora(sessao['date'], sessao['time'])}\n"
+    return f"*{label}:* {format_time(session['date'], session['time'])}\n"
 
 
-def construir_mensagem(corrida):
-    mensagem = f"*{corrida['raceName']}*\n\n"
-    mensagem += linha_sessao(corrida, "FirstPractice", "Treino 1")
+def build_message(race):
+    message = f"*{race['raceName']}*\n\n"
+    message += session_line(race, "FirstPractice", "Treino 1")
 
-    # Num fim de semana sprint, as sessões de sprint ocupam o lugar do T2/T3.
-    if "SprintQualifying" in corrida:
-        mensagem += linha_sessao(corrida, "SprintQualifying", "Qualificação Sprint")
+    # On a sprint weekend the sprint sessions take the place of FP2/FP3.
+    if "SprintQualifying" in race:
+        message += session_line(race, "SprintQualifying", "Qualificação Sprint")
     else:
-        mensagem += linha_sessao(corrida, "SecondPractice", "Treino 2")
+        message += session_line(race, "SecondPractice", "Treino 2")
 
-    if "Sprint" in corrida:
-        mensagem += linha_sessao(corrida, "Sprint", "Sprint")
+    if "Sprint" in race:
+        message += session_line(race, "Sprint", "Sprint")
     else:
-        mensagem += linha_sessao(corrida, "ThirdPractice", "Treino 3")
+        message += session_line(race, "ThirdPractice", "Treino 3")
 
-    mensagem += linha_sessao(corrida, "Qualifying", "Qualificação")
-    mensagem += f"*Corrida:* {converter_hora(corrida['date'], corrida['time'])}\n\n"
-    mensagem += f"*Assiste em:* {LINK_STREAM}"
-    return mensagem
+    message += session_line(race, "Qualifying", "Qualificação")
+    message += f"*Corrida:* {format_time(race['date'], race['time'])}\n\n"
+    message += f"*Assiste em:* {STREAM_LINK}"
+    return message
 
 
 def main():
-    whatsapp.validar_config()
+    whatsapp.validate_config()
 
-    corrida = f1_api.proxima_corrida()
-    data_corrida = datetime.strptime(corrida["date"], "%Y-%m-%d").date()
-    dias = (data_corrida - datetime.now(LISBOA).date()).days
+    race = f1_api.next_race()
+    race_date = datetime.strptime(race["date"], "%Y-%m-%d").date()
+    days = (race_date - datetime.now(LISBON).date()).days
 
-    if not 0 <= dias <= JANELA_DIAS:
-        print(
-            f"Próxima corrida ({corrida['raceName']}) é daqui a {dias} dias. "
-            "Nada a enviar."
-        )
+    if not 0 <= days <= WINDOW_DAYS:
+        print(f"Next race ({race['raceName']}) is {days} days away. Nothing to send.")
         return 0
 
-    whatsapp.enviar_e_fixar(construir_mensagem(corrida))
+    whatsapp.send_and_pin(build_message(race))
     return 0
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as erro:
-        print(f"ERRO: {erro}", file=sys.stderr)
+    except Exception as error:
+        print(f"ERROR: {error}", file=sys.stderr)
         sys.exit(1)

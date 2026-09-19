@@ -1,10 +1,10 @@
-"""Testes do parser do live_bot contra uma captura real da F1.
+"""Tests for the live_bot parser against a real F1 capture.
 
-O formato de f1_live.txt é definido pela F1 e pelo FastF1, não por este
-projecto: pode mudar sem aviso e, quando mudou, o bot deixou de enviar
-alertas sem dar sinal nenhum. É esse o risco que estes testes cobrem.
+The format of f1_live.txt is defined by F1 and FastF1, not by this project:
+it can change without notice and, when it did, the bot silently stopped
+sending alerts. That is the risk these tests cover.
 
-Correr com:  python3 tests/test_parser.py
+Run with:  python3 tests/test_parser.py
 """
 
 import contextlib
@@ -12,108 +12,106 @@ import io
 import sys
 from pathlib import Path
 
-RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(RAIZ))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 import live_bot  # noqa: E402
 
-# Antes de tudo o resto: importar whatsapp carrega o .env do projecto, por
-# isso qualquer chamada a enviar() mandaria uma mensagem verdadeira para o
-# grupo. Aqui só se acumula o que teria sido enviado.
-ENVIADOS = []
-live_bot.whatsapp.enviar = ENVIADOS.append
+# Before anything else: importing whatsapp loads the project's .env, so any
+# call to send() would push a real message to the group. Here we only collect
+# what would have been sent.
+SENT = []
+live_bot.whatsapp.send = SENT.append
 
 FIXTURE = Path(__file__).parent / "f1_live_sample.txt"
 
 
-def linhas_fixture():
+def fixture_lines():
     return FIXTURE.read_text(encoding="utf-8").splitlines()
 
 
-def registo(topico_procurado):
-    for linha in linhas_fixture():
-        topico, dados = live_bot.analisar_linha(linha)
-        if topico == topico_procurado:
-            return dados
-    raise AssertionError(f"{topico_procurado} não está na fixture")
+def record(wanted_topic):
+    for line in fixture_lines():
+        topic, data = live_bot.parse_line(line)
+        if topic == wanted_topic:
+            return data
+    raise AssertionError(f"{wanted_topic} is not in the fixture")
 
 
-def incremental(topico, dados):
-    """Reproduz uma actualização ao vivo: o FastF1 escreve o payload como
-    dict, ao contrário do snapshot inicial, que o escreve como string JSON."""
-    return str([topico, dados, "2026-09-13T13:00:00.000Z"])
+def incremental(topic, data):
+    """Reproduce a live update: FastF1 writes the payload as a dict, unlike
+    the initial snapshot, which writes it as a JSON string."""
+    return str([topic, data, "2026-09-13T13:00:00.000Z"])
 
 
-def teste_toda_a_captura_e_legivel():
-    topicos = [live_bot.analisar_linha(l)[0] for l in linhas_fixture()]
-    assert None not in topicos, "há linhas reais que o parser não lê"
-    assert {"TrackStatus", "RaceControlMessages"} <= set(topicos)
+def test_whole_capture_is_readable():
+    topics = [live_bot.parse_line(l)[0] for l in fixture_lines()]
+    assert None not in topics, "there are real lines the parser cannot read"
+    assert {"TrackStatus", "RaceControlMessages"} <= set(topics)
 
 
-def teste_snapshot_nao_alerta_retroactivamente():
-    """Ligar a meio da sessão não pode despejar o histórico no grupo."""
-    ENVIADOS.clear()
-    live_bot.tratar_track_status(registo("TrackStatus"), None, True)
-    live_bot.tratar_race_control(registo("RaceControlMessages"), set(), True)
-    assert ENVIADOS == [], ENVIADOS
+def test_snapshot_does_not_alert_retroactively():
+    """Connecting mid-session must not dump the history into the group."""
+    SENT.clear()
+    live_bot.handle_track_status(record("TrackStatus"), None, True)
+    live_bot.handle_race_control(record("RaceControlMessages"), set(), True)
+    assert SENT == [], SENT
 
 
-def teste_estados_de_pista():
-    ENVIADOS.clear()
-    estado = "1"
-    for codigo in ("4", "4", "2", "6", "5", "1"):
-        topico, dados = live_bot.analisar_linha(
-            incremental("TrackStatus", {"Status": codigo})
-        )
-        assert topico == "TrackStatus"
-        estado = live_bot.tratar_track_status(dados, estado)
+def test_track_status_transitions():
+    SENT.clear()
+    status = "1"
+    for code in ("4", "4", "2", "6", "5", "1"):
+        topic, data = live_bot.parse_line(incremental("TrackStatus", {"Status": code}))
+        assert topic == "TrackStatus"
+        status = live_bot.handle_track_status(data, status)
 
-    # O 4 repetido não realerta e o amarelo (2) é ignorado de propósito.
-    assert ENVIADOS == [
+    # The repeated 4 does not re-alert and yellow (2) is ignored on purpose.
+    assert SENT == [
         "*SAFETY CAR NA PISTA!*",
         "*VIRTUAL SAFETY CAR!*",
         "*BANDEIRA VERMELHA!* Sessão interrompida.",
         "*PISTA LIMPA!* Corrida retomada.",
-    ], ENVIADOS
+    ], SENT
 
 
-def teste_race_control_filtra_o_que_interessa():
-    ENVIADOS.clear()
-    vistas = set()
-    mensagens = registo("RaceControlMessages")["Messages"]
-    # Nas actualizações ao vivo, Messages vem como dict indexado, não lista.
-    topico, dados = live_bot.analisar_linha(
+def test_race_control_filters_what_matters():
+    SENT.clear()
+    seen = set()
+    messages = record("RaceControlMessages")["Messages"]
+    # In live updates Messages arrives as a dict keyed by index, not a list.
+    topic, data = live_bot.parse_line(
         incremental("RaceControlMessages",
-                    {"Messages": {str(i): m for i, m in enumerate(mensagens)}})
+                    {"Messages": {str(i): m for i, m in enumerate(messages)}})
     )
-    assert topico == "RaceControlMessages"
-    live_bot.tratar_race_control(dados, vistas)
-    live_bot.tratar_race_control(dados, vistas)  # repetido não realerta
+    assert topic == "RaceControlMessages"
+    live_bot.handle_race_control(data, seen)
+    live_bot.handle_race_control(data, seen)  # repeated must not re-alert
 
-    assert len(ENVIADOS) == 2, ENVIADOS
-    assert ENVIADOS[0].startswith("*Investigação:*")
-    assert ENVIADOS[1].startswith("*Penalização:*")
-    # "REVIEWED NO FURTHER INVESTIGATION" contém INVESTIGATION mas não alerta.
-    assert not any("NO FURTHER" in m for m in ENVIADOS), ENVIADOS
+    assert len(SENT) == 2, SENT
+    assert SENT[0].startswith("*Investigação:*")
+    assert SENT[1].startswith("*Penalização:*")
+    # "REVIEWED NO FURTHER INVESTIGATION" contains INVESTIGATION but must not alert.
+    assert not any("NO FURTHER" in m for m in SENT), SENT
 
 
-def teste_linhas_invalidas_nao_rebentam():
-    for lixo in ("", "   ", "lixo\n", "[incompleto",
-                 "['Topico', 'isto-nao-e-json', '']", "['Topico', 42, '']"):
-        assert live_bot.analisar_linha(lixo) == (None, None), repr(lixo)
+def test_invalid_lines_do_not_crash():
+    for junk in ("", "   ", "junk\n", "[incomplete",
+                 "['Topic', 'not-json', '']", "['Topic', 42, '']"):
+        assert live_bot.parse_line(junk) == (None, None), repr(junk)
 
 
 if __name__ == "__main__":
-    testes = [v for k, v in sorted(globals().items()) if k.startswith("teste_")]
-    falhas = 0
-    for teste in testes:
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    failures = 0
+    for test in tests:
         try:
-            # Os alertas imprimem para stdout; aqui só interessa o veredicto.
+            # Alerts print to stdout; only the verdict matters here.
             with contextlib.redirect_stdout(io.StringIO()):
-                teste()
-            print(f"  OK    {teste.__name__}")
-        except AssertionError as erro:
-            falhas += 1
-            print(f"  FALHA {teste.__name__}: {erro}")
-    print(f"\n{len(testes) - falhas}/{len(testes)} testes passaram")
-    sys.exit(1 if falhas else 0)
+                test()
+            print(f"  PASS  {test.__name__}")
+        except AssertionError as error:
+            failures += 1
+            print(f"  FAIL  {test.__name__}: {error}")
+    print(f"\n{len(tests) - failures}/{len(tests)} tests passed")
+    sys.exit(1 if failures else 0)

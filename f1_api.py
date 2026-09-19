@@ -1,31 +1,31 @@
-"""Acesso à API Jolpica (compatível com Ergast)."""
+"""Access to the Jolpica F1 API (Ergast-compatible)."""
 
-from http_client import obter_json
+from http_client import get_json
 
 BASE = "https://api.jolpi.ca/ergast/f1"
 
 
-class SemDados(Exception):
-    """A API respondeu, mas sem os dados pedidos."""
+class NoData(Exception):
+    """The API responded, but without the requested data."""
 
 
-def proxima_corrida():
-    """Devolve o dicionário da próxima corrida do calendário em curso."""
-    dados = obter_json(f"{BASE}/current/next.json")
-    corridas = dados["MRData"]["RaceTable"]["Races"]
-    if not corridas:
-        raise SemDados("A API não devolveu nenhuma próxima corrida.")
-    return corridas[0]
+def next_race():
+    """Return the next race of the current calendar."""
+    data = get_json(f"{BASE}/current/next.json")
+    races = data["MRData"]["RaceTable"]["Races"]
+    if not races:
+        raise NoData("The API returned no upcoming race.")
+    return races[0]
 
 
-def resultados_qualificacao(epoca, ronda):
-    """Devolve os QualifyingResults, ou None se ainda não estiverem publicados.
+def qualifying_results(season, round_number):
+    """Return the QualifyingResults, or None if they are not published yet.
 
-    A distinção importa: None é uma situação normal (a qualificação acabou de
-    terminar) e não deve ser tratada como erro.
+    The distinction matters: None is a normal situation (qualifying has just
+    finished) and must not be treated as an error.
     """
-    dados = obter_json(f"{BASE}/{epoca}/{ronda}/qualifying.json")
-    corridas = dados["MRData"]["RaceTable"]["Races"]
-    if not corridas or "QualifyingResults" not in corridas[0]:
+    data = get_json(f"{BASE}/{season}/{round_number}/qualifying.json")
+    races = data["MRData"]["RaceTable"]["Races"]
+    if not races or "QualifyingResults" not in races[0]:
         return None
-    return corridas[0]["QualifyingResults"]
+    return races[0]["QualifyingResults"]

@@ -1,8 +1,8 @@
-"""Pedidos HTTP com timeout e retries, partilhados por todos os bots.
+"""HTTP requests with timeouts and retries, shared by every bot.
 
-Um 500 transitório da Jolpica ou da Green API deixava de perder a mensagem
-da semana: os bots agendados só correm em janelas curtas e não há segunda
-oportunidade dentro da mesma execução.
+A transient 500 from Jolpica or Green API used to lose the week's message:
+the scheduled bots only run in short windows and get no second chance within
+a single execution.
 """
 
 import time
@@ -10,48 +10,48 @@ import time
 import requests
 
 TIMEOUT = 10
-TENTATIVAS = 3
-ESPERA_BASE = 3
+ATTEMPTS = 3
+BACKOFF_BASE = 3
 
 
-class ErroHTTP(Exception):
-    """O pedido falhou depois de esgotadas as tentativas."""
+class RequestFailed(Exception):
+    """The request failed after all attempts were exhausted."""
 
 
-def pedir(metodo, url, **kwargs):
-    """Faz um pedido HTTP, repetindo em erros de rede e respostas 5xx.
+def request(method, url, **kwargs):
+    """Make an HTTP request, retrying on network errors and 5xx responses.
 
-    As respostas 4xx são devolvidas sem repetição: são erros de configuração
-    (token inválido, chat inexistente) que não melhoram com nova tentativa.
+    4xx responses are returned without retrying: those are configuration
+    errors (bad token, unknown chat) that will not improve on a second try.
     """
     kwargs.setdefault("timeout", TIMEOUT)
-    ultimo_erro = None
+    last_error = None
 
-    for tentativa in range(1, TENTATIVAS + 1):
+    for attempt in range(1, ATTEMPTS + 1):
         try:
-            resposta = requests.request(metodo, url, **kwargs)
-            if resposta.status_code >= 500:
+            response = requests.request(method, url, **kwargs)
+            if response.status_code >= 500:
                 raise requests.HTTPError(
-                    f"HTTP {resposta.status_code}: {resposta.text[:200]}"
+                    f"HTTP {response.status_code}: {response.text[:200]}"
                 )
-            return resposta
-        except requests.RequestException as erro:
-            ultimo_erro = erro
-            if tentativa < TENTATIVAS:
-                espera = ESPERA_BASE * tentativa
+            return response
+        except requests.RequestException as error:
+            last_error = error
+            if attempt < ATTEMPTS:
+                delay = BACKOFF_BASE * attempt
                 print(
-                    f"Tentativa {tentativa}/{TENTATIVAS} falhou ({erro}). "
-                    f"A repetir em {espera}s..."
+                    f"Attempt {attempt}/{ATTEMPTS} failed ({error}). "
+                    f"Retrying in {delay}s..."
                 )
-                time.sleep(espera)
+                time.sleep(delay)
 
-    raise ErroHTTP(
-        f"{metodo} {url} falhou após {TENTATIVAS} tentativas: {ultimo_erro}"
+    raise RequestFailed(
+        f"{method} {url} failed after {ATTEMPTS} attempts: {last_error}"
     )
 
 
-def obter_json(url, **kwargs):
-    """GET que devolve JSON já descodificado."""
-    resposta = pedir("GET", url, **kwargs)
-    resposta.raise_for_status()
-    return resposta.json()
+def get_json(url, **kwargs):
+    """GET returning the decoded JSON body."""
+    response = request("GET", url, **kwargs)
+    response.raise_for_status()
+    return response.json()

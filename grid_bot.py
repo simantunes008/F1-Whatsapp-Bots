@@ -1,19 +1,20 @@
-"""Envia a grelha de partida assim que os resultados da qualificação saem.
+"""Send the starting grid as soon as the qualifying results are published.
 
-Corre de hora a hora de sexta a domingo (ver .github/workflows/grid_bot.yml)
-e envia na primeira execução em que a API já tenha os resultados. Antes havia
-uma única tentativa ao sábado às 17:00 UTC: se os resultados ainda não
-estivessem publicados, a grelha desse fim de semana nunca era enviada, e em
-fins de semana sprint (qualificação à sexta) nunca chegava a correr no dia
-certo.
+Runs hourly from Friday to Sunday (see .github/workflows/grid_bot.yml) and
+sends on the first run where the API has results. Previously there was a
+single attempt on Saturday at 17:00 UTC: if results were not published yet,
+that weekend's grid was never sent, and on sprint weekends (qualifying on
+Friday) it never ran on the right day at all.
 
-A janela válida é entre o início da qualificação e o início da corrida, em
-UTC. Comparar a data UTC da API com a data em Lisboa falhava em sessões
-nocturnas, em que as duas datas divergem.
+The valid window is between the start of qualifying and the start of the
+race, in UTC. Comparing the API's UTC date against a Lisbon date broke for
+late-night sessions, where the two dates differ.
 
-O ficheiro de estado evita repetir o envio nas execuções seguintes da mesma
-ronda. Se o estado se perder (cache do Actions expirada), o pior caso é uma
-mensagem duplicada, não uma mensagem em falta.
+The state file prevents repeat sends on later runs of the same round. If the
+state is lost (expired Actions cache), the worst case is a duplicate message,
+not a missing one.
+
+Message text stays in Portuguese: it is what the group reads.
 """
 
 import json
@@ -25,104 +26,95 @@ from pathlib import Path
 import f1_api
 import whatsapp
 
-POSICOES = 10
-FICHEIRO_ESTADO = Path(os.getenv("GRID_STATE_FILE", ".state/grid_enviados.json"))
-RONDAS_GUARDADAS = 5
+POSITIONS = 10
+STATE_FILE = Path(os.getenv("GRID_STATE_FILE", ".state/grid_sent.json"))
+ROUNDS_KEPT = 5
 
 
-def _ler_estado():
-    if not FICHEIRO_ESTADO.exists():
+def _read_state():
+    if not STATE_FILE.exists():
         return []
     try:
-        enviados = json.loads(FICHEIRO_ESTADO.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as erro:
-        print(f"Aviso: estado ilegível ({erro}). A tratar como vazio.")
+        sent = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as error:
+        print(f"Warning: unreadable state ({error}). Treating it as empty.")
         return []
-    return enviados if isinstance(enviados, list) else []
+    return sent if isinstance(sent, list) else []
 
 
-def ja_enviado(chave):
-    return chave in _ler_estado()
+def already_sent(key):
+    return key in _read_state()
 
 
-def marcar_enviado(chave):
-    """Grava depois do envio: arriscar um duplicado é melhor do que marcar
-    como enviada uma grelha que afinal não chegou ao grupo."""
-    enviados = [*_ler_estado(), chave][-RONDAS_GUARDADAS:]
-    FICHEIRO_ESTADO.parent.mkdir(parents=True, exist_ok=True)
-    FICHEIRO_ESTADO.write_text(json.dumps(enviados), encoding="utf-8")
+def mark_sent(key):
+    """Written after the send, deliberately: risking a duplicate beats
+    marking as sent a grid that never reached the group."""
+    sent = [*_read_state(), key][-ROUNDS_KEPT:]
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps(sent), encoding="utf-8")
 
 
-def instante_utc(sessao, hora_omissao):
-    """Converte {'date', 'time'} da API num datetime UTC.
+def utc_instant(session, default_time):
+    """Convert the API's {'date', 'time'} into a UTC datetime.
 
-    Nem todas as sessões trazem 'time'. A omissão escolhida por quem chama
-    alarga a janela em vez de a fechar: é preferível tentar a mais e falhar
-    no passo seguinte do que saltar um envio.
+    Not every session carries 'time'. The default chosen by the caller widens
+    the window rather than closing it: better to try once too often and fail
+    at the next step than to skip a send.
     """
-    hora = sessao.get("time") or hora_omissao
+    time_str = session.get("time") or default_time
     return datetime.strptime(
-        f"{sessao['date']}T{hora}", "%Y-%m-%dT%H:%M:%SZ"
+        f"{session['date']}T{time_str}", "%Y-%m-%dT%H:%M:%SZ"
     ).replace(tzinfo=timezone.utc)
 
 
-def construir_mensagem(nome_corrida, resultados):
-    mensagem = f"*Grelha de Partida - {nome_corrida}*\n\n"
-    for resultado in resultados[:POSICOES]:
-        piloto = (
-            f"{resultado['Driver']['givenName']} "
-            f"{resultado['Driver']['familyName']}"
-        )
-        mensagem += (
-            f"{resultado['position']}. {piloto} "
-            f"({resultado['Constructor']['name']})\n"
-        )
-    return mensagem
+def build_message(race_name, results):
+    message = f"*Grelha de Partida - {race_name}*\n\n"
+    for result in results[:POSITIONS]:
+        driver = f"{result['Driver']['givenName']} {result['Driver']['familyName']}"
+        message += f"{result['position']}. {driver} ({result['Constructor']['name']})\n"
+    return message
 
 
 def main():
-    whatsapp.validar_config()
+    whatsapp.validate_config()
 
-    corrida = f1_api.proxima_corrida()
-    nome = corrida["raceName"]
+    race = f1_api.next_race()
+    name = race["raceName"]
 
-    if "Qualifying" not in corrida:
-        print(f"{nome} não tem qualificação estruturada na API. Nada a fazer.")
+    if "Qualifying" not in race:
+        print(f"{name} has no structured qualifying in the API. Nothing to do.")
         return 0
 
-    inicio_quali = instante_utc(corrida["Qualifying"], "00:00:00Z")
-    inicio_corrida = instante_utc(corrida, "23:59:59Z")
-    agora = datetime.now(timezone.utc)
+    qualifying_start = utc_instant(race["Qualifying"], "00:00:00Z")
+    race_start = utc_instant(race, "23:59:59Z")
+    now = datetime.now(timezone.utc)
 
-    if agora < inicio_quali:
-        print(f"A qualificação de {nome} só começa às {inicio_quali:%d/%m %H:%M} UTC.")
+    if now < qualifying_start:
+        print(f"Qualifying for {name} starts at {qualifying_start:%d/%m %H:%M} UTC.")
         return 0
 
-    if agora >= inicio_corrida:
-        print(f"A corrida {nome} já começou. Fora da janela de envio.")
+    if now >= race_start:
+        print(f"{name} has already started. Outside the sending window.")
         return 0
 
-    chave = f"{corrida['season']}-{corrida['round']}"
-    if ja_enviado(chave):
-        print(f"A grelha de {nome} ({chave}) já foi enviada. Nada a fazer.")
+    key = f"{race['season']}-{race['round']}"
+    if already_sent(key):
+        print(f"The grid for {name} ({key}) was already sent. Nothing to do.")
         return 0
 
-    resultados = f1_api.resultados_qualificacao(corrida["season"], corrida["round"])
-    if not resultados:
-        print(
-            "Resultados ainda não publicados pela API. "
-            "Nova tentativa na próxima execução."
-        )
+    results = f1_api.qualifying_results(race["season"], race["round"])
+    if not results:
+        print("Results not published by the API yet. Will retry on the next run.")
         return 0
 
-    whatsapp.enviar_e_fixar(construir_mensagem(nome, resultados))
-    marcar_enviado(chave)
+    whatsapp.send_and_pin(build_message(name, results))
+    mark_sent(key)
     return 0
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as erro:
-        print(f"ERRO: {erro}", file=sys.stderr)
+    except Exception as error:
+        print(f"ERROR: {error}", file=sys.stderr)
         sys.exit(1)

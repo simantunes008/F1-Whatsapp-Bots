@@ -41,7 +41,7 @@ F1BOT/
 ### 2. Grid Bot (`grid_bot.py`)
 * **Execution**: Automated via GitHub Actions (hourly, Friday through Sunday).
 * **Functionality**: Runs hourly and sends on the first execution where the API has published the qualifying results, then stays quiet for the rest of the weekend. The hourly schedule is required because qualifying times vary by many hours between Grands Prix, and on sprint weekends qualifying falls on Friday. The valid window is between the start of qualifying and the start of the race, computed in UTC.
-* **Deduplication**: `.state/grid_enviados.json` records which rounds were already sent and is persisted between runs via `actions/cache`. If the cache expires, the worst case is a duplicate message rather than a missing one.
+* **Deduplication**: `.state/grid_sent.json` records which rounds were already sent and is persisted between runs via `actions/cache`. If the cache expires, the worst case is a duplicate message rather than a missing one.
 
 ### 3. Live Race Bot (`live_bot.py`)
 * **Execution**: Local execution during race sessions.
@@ -55,6 +55,12 @@ F1BOT/
 
 * All HTTP calls go through `http_client.py`, which applies a 10-second timeout and retries three times on network errors and 5xx responses. A `4xx` is not retried: it signals a configuration problem.
 * The scheduled bots exit with status `0` when there is nothing to send and status `1` on error, so a failed GitHub Actions run is visible and triggers a notification instead of passing silently as green.
+
+## Language Convention
+
+Code is English — identifiers, comments, docstrings and console output. Every
+string that reaches WhatsApp stays European Portuguese, since that is what the
+group reads. Keep this split when adding features.
 
 ## Environment Variables
 
@@ -94,7 +100,7 @@ python tests/test_parser.py
 Covers the live-timing parser against a trimmed real capture. The format of
 `f1_live.txt` is defined by F1 and FastF1 rather than by this project, so it
 can change without notice — and when it did, the bot silently stopped sending
-alerts. Nothing is sent while the tests run; `whatsapp.enviar` is replaced by
+alerts. Nothing is sent while the tests run; `whatsapp.send` is replaced by
 a collector.
 
 Run this after touching `live_bot.py`. To refresh the fixture, capture a new

@@ -1,14 +1,16 @@
-"""Cliente da Green API: envio e fixação de mensagens no grupo.
+"""Green API client: sending and pinning messages in the group.
 
-Antes este bloco estava copiado nos três bots. Qualquer mudança ao host, às
-credenciais ou à sequência enviar/fixar passa a ser feita só aqui.
+This block used to be copied across all three bots. Any change to the host,
+the credentials or the send/pin sequence now happens in one place.
+
+Note: message bodies stay in Portuguese — they are what the group reads.
 """
 
 import os
 
 from dotenv import load_dotenv
 
-from http_client import ErroHTTP, pedir
+from http_client import RequestFailed, request
 
 load_dotenv()
 
@@ -16,88 +18,86 @@ ID_INSTANCE = os.getenv("ID_INSTANCE")
 API_TOKEN = os.getenv("API_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# O prefixo do host é específico da instância Green API, não é um endpoint
-# genérico. GREEN_API_HOST permite trocar de instância sem mexer no código.
+# The host prefix is tied to the Green API instance, it is not a generic
+# endpoint. GREEN_API_HOST allows switching instances without code changes.
 HOST = os.getenv("GREEN_API_HOST", "https://7107.api.greenapi.com")
 
 
-class ErroWhatsApp(Exception):
-    """A Green API recusou o pedido ou falta configuração."""
+class WhatsAppError(Exception):
+    """Green API rejected the request, or configuration is missing."""
 
 
-def validar_config():
-    """Falha cedo e com nome, em vez de um 401 opaco a meio do envio."""
-    em_falta = [
-        nome
-        for nome, valor in (
+def validate_config():
+    """Fail early and by name, instead of an opaque 401 mid-send."""
+    missing = [
+        name
+        for name, value in (
             ("ID_INSTANCE", ID_INSTANCE),
             ("API_TOKEN", API_TOKEN),
             ("CHAT_ID", CHAT_ID),
         )
-        if not valor
+        if not value
     ]
-    if em_falta:
-        raise ErroWhatsApp(
-            f"Variáveis de ambiente em falta: {', '.join(em_falta)}"
-        )
+    if missing:
+        raise WhatsAppError(f"Missing environment variables: {', '.join(missing)}")
 
 
-def _url(metodo_api):
-    return f"{HOST}/waInstance{ID_INSTANCE}/{metodo_api}/{API_TOKEN}"
+def _url(api_method):
+    return f"{HOST}/waInstance{ID_INSTANCE}/{api_method}/{API_TOKEN}"
 
 
-def enviar(mensagem):
-    """Envia a mensagem e devolve o idMessage.
+def send(message):
+    """Send the message and return its idMessage.
 
-    Levanta ErroWhatsApp se o envio não for confirmado: quem chama decide se
-    isso termina o programa ou é apenas registado.
+    Raises WhatsAppError if the send is not confirmed: the caller decides
+    whether that ends the program or is merely logged.
     """
-    validar_config()
-    resposta = pedir(
-        "POST", _url("sendMessage"), json={"chatId": CHAT_ID, "message": mensagem}
+    validate_config()
+    response = request(
+        "POST", _url("sendMessage"), json={"chatId": CHAT_ID, "message": message}
     )
 
-    if resposta.status_code != 200:
-        raise ErroWhatsApp(
-            f"Envio recusado (HTTP {resposta.status_code}): {resposta.text[:200]}"
+    if response.status_code != 200:
+        raise WhatsAppError(
+            f"Send rejected (HTTP {response.status_code}): {response.text[:200]}"
         )
 
-    id_mensagem = resposta.json().get("idMessage")
-    if not id_mensagem:
-        raise ErroWhatsApp(f"Resposta sem idMessage: {resposta.text[:200]}")
+    message_id = response.json().get("idMessage")
+    if not message_id:
+        raise WhatsAppError(f"Response without idMessage: {response.text[:200]}")
 
-    return id_mensagem
+    return message_id
 
 
-def fixar(id_mensagem):
-    """Fixa a mensagem para todos. Uma falha aqui é avisada, não propagada:
-    a mensagem já chegou ao grupo, que é o que interessa."""
+def pin(message_id):
+    """Pin the message for everyone. A failure here warns but does not
+    propagate: the message already reached the group, which is what counts."""
     try:
-        resposta = pedir(
+        response = request(
             "POST",
             _url("pinMessage"),
             json={
                 "chatId": CHAT_ID,
-                "idMessage": id_mensagem,
+                "idMessage": message_id,
                 "pin": True,
                 "pinType": "pinForEveryone",
             },
         )
-    except ErroHTTP as erro:
-        print(f"Aviso: não foi possível fixar a mensagem: {erro}")
+    except RequestFailed as error:
+        print(f"Warning: could not pin the message: {error}")
         return False
 
-    if resposta.status_code != 200:
-        print(f"Aviso: não foi possível fixar a mensagem: {resposta.text[:200]}")
+    if response.status_code != 200:
+        print(f"Warning: could not pin the message: {response.text[:200]}")
         return False
 
-    print("Mensagem fixada no grupo.")
+    print("Message pinned in the group.")
     return True
 
 
-def enviar_e_fixar(mensagem):
-    """Envia e fixa. Devolve o idMessage."""
-    id_mensagem = enviar(mensagem)
-    print("Mensagem enviada.")
-    fixar(id_mensagem)
-    return id_mensagem
+def send_and_pin(message):
+    """Send and pin. Returns the idMessage."""
+    message_id = send(message)
+    print("Message sent.")
+    pin(message_id)
+    return message_id

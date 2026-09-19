@@ -1,16 +1,18 @@
-"""Alertas em directo durante uma sessão de F1.
+"""Live alerts during an F1 session.
 
-Duas metades: uma thread daemon corre o SignalRClient do FastF1, que escreve
-as mensagens cruas em f1_live.txt; a thread principal segue o ficheiro e
-envia os alertas. O ficheiro é o único canal entre as duas.
+Two halves: a daemon thread runs FastF1's SignalRClient, which writes the raw
+messages to f1_live.txt; the main thread tails that file and sends alerts.
+The file is the only channel between them.
 
-Requer subscrição F1TV: o FastF1 autentica-se no arranque (fluxo no browser
-na primeira vez, token em cache local depois disso).
+Requires an F1TV subscription: FastF1 authenticates on startup (browser flow
+the first time, cached token afterwards).
 
-Formato do ficheiro: o FastF1 escreve str([topico, dados, timestamp]), um
-literal Python e não JSON. Nos snapshots iniciais 'dados' vem como string
-JSON; nas actualizações incrementais vem já como dict. É por isso que a
-leitura passa por ast.literal_eval e não por json.loads sobre a linha toda.
+File format: FastF1 writes str([topic, data, timestamp]) — a Python literal,
+not JSON. In the initial snapshot 'data' is a JSON string; in incremental
+updates it is already a dict. That is why reading goes through
+ast.literal_eval rather than json.loads over the whole line.
+
+Alert text stays in Portuguese: it is what the group reads.
 """
 
 import ast
@@ -25,252 +27,251 @@ from fastf1.livetiming.client import SignalRClient
 
 import whatsapp
 
-FICHEIRO_DADOS = Path("f1_live.txt")
-FICHEIRO_ANTERIOR = Path("f1_live.prev.txt")
+DATA_FILE = Path("f1_live.txt")
+PREVIOUS_FILE = Path("f1_live.prev.txt")
 
-# Códigos de TrackStatus da F1. O amarelo (2) fica deliberadamente de fora:
-# em corrida é frequente demais e encheria o grupo. O fim de VSC (7) também,
-# porque vem sempre seguido de AllClear (1).
-ESTADOS_PISTA = {
+# F1 TrackStatus codes. Yellow (2) is deliberately left out: during a race it
+# is far too frequent and would flood the group. So is VSC ending (7),
+# because AllClear (1) always follows it.
+TRACK_STATUS_ALERTS = {
     "1": "*PISTA LIMPA!* Corrida retomada.",
     "4": "*SAFETY CAR NA PISTA!*",
     "5": "*BANDEIRA VERMELHA!* Sessão interrompida.",
     "6": "*VIRTUAL SAFETY CAR!*",
 }
 
-FILTROS_RACE_CONTROL = (
+RACE_CONTROL_FILTERS = (
     ("INVESTIGATION", "Investigação"),
     ("PENALTY", "Penalização"),
 )
 
-# "REVIEWED NO FURTHER INVESTIGATION" contém "INVESTIGATION" mas significa
-# exactamente o contrário: o caso foi visto e arquivado sem consequências.
-EXCLUSOES_RACE_CONTROL = ("NO FURTHER INVESTIGATION",)
+# "REVIEWED NO FURTHER INVESTIGATION" contains "INVESTIGATION" but means the
+# exact opposite: the case was looked at and closed with no consequences.
+RACE_CONTROL_EXCLUSIONS = ("NO FURTHER INVESTIGATION",)
 
-INTERVALO_LEITURA = 1
-ESPERA_RELIGAR = 15
-ARRANQUE_TIMEOUT = 120
-# O SignalRClient desliga-se sozinho ao fim de `timeout` segundos sem dados.
-# O valor por omissão (60s) mata a ligação enquanto se espera pelo início da
-# sessão, por isso é alargado aqui.
-TIMEOUT_CLIENTE = int(os.getenv("FASTF1_TIMEOUT", "600"))
-AVISO_SEM_DADOS = 300
+READ_INTERVAL = 1
+RECONNECT_DELAY = 15
+STARTUP_TIMEOUT = 120
+# SignalRClient shuts itself down after `timeout` seconds without data. The
+# default (60s) kills the connection while waiting for a session to start,
+# so it is widened here.
+CLIENT_TIMEOUT = int(os.getenv("FASTF1_TIMEOUT", "600"))
+STALL_WARNING = 300
 
 
-def preparar_ficheiros():
-    """Guarda uma captura anterior de lado antes de começar.
+def rotate_capture():
+    """Move a previous capture aside before starting.
 
-    O cliente escreve em modo append (ver iniciar_cliente), por isso sem isto
-    as sessões acumulavam-se todas no mesmo ficheiro: cresceria sem limite e
-    deixaria de servir para carregar no LiveTimingData do FastF1, que espera
-    uma sessão de cada vez.
+    The client writes in append mode (see run_client), so without this every
+    session would pile into the same file: it would grow without bound and
+    stop being usable with FastF1's LiveTimingData, which expects one session
+    at a time.
 
-    Move em vez de apagar porque a captura anterior é o único dado real
-    disponível para validar alterações ao parser — foi dela que saiu a
-    fixture em tests/f1_live_sample.txt. Guarda só uma geração.
+    It moves rather than deletes because the previous capture is the only
+    real data available for validating parser changes — it is where
+    tests/f1_live_sample.txt came from. Only one generation is kept.
     """
-    if FICHEIRO_DADOS.exists():
-        FICHEIRO_DADOS.replace(FICHEIRO_ANTERIOR)
-        print(f"Captura anterior guardada em {FICHEIRO_ANTERIOR}.")
+    if DATA_FILE.exists():
+        DATA_FILE.replace(PREVIOUS_FILE)
+        print(f"Previous capture saved to {PREVIOUS_FILE}.")
 
 
-def enviar_alerta(mensagem):
-    """Um alerta falhado não pode derrubar o monitor a meio da corrida."""
-    print(f"ALERTA: {mensagem}")
+def send_alert(message):
+    """A failed alert must not bring down the monitor mid-race."""
+    print(f"ALERT: {message}")
     try:
-        whatsapp.enviar(mensagem)
-    except Exception as erro:
-        print(f"ERRO ao enviar alerta: {erro}", file=sys.stderr)
+        whatsapp.send(message)
+    except Exception as error:
+        print(f"ERROR sending alert: {error}", file=sys.stderr)
 
 
-def analisar_linha(linha):
-    """Devolve (topico, dados) de uma linha crua, ou (None, None) se não der."""
-    linha = linha.strip()
-    if not linha.startswith("["):
+def parse_line(line):
+    """Return (topic, data) for a raw line, or (None, None) if unreadable."""
+    line = line.strip()
+    if not line.startswith("["):
         return None, None
 
     try:
-        registo = ast.literal_eval(linha)
+        record = ast.literal_eval(line)
     except (ValueError, SyntaxError, MemoryError, RecursionError):
         return None, None
 
-    if not isinstance(registo, list) or len(registo) < 2:
+    if not isinstance(record, list) or len(record) < 2:
         return None, None
 
-    topico, dados = registo[0], registo[1]
-    if isinstance(dados, str):
+    topic, data = record[0], record[1]
+    if isinstance(data, str):
         try:
-            dados = json.loads(dados)
+            data = json.loads(data)
         except json.JSONDecodeError:
             return None, None
 
-    if not isinstance(dados, dict):
+    if not isinstance(data, dict):
         return None, None
-    return topico, dados
+    return topic, data
 
 
-def tratar_track_status(dados, estado_anterior, silencioso=False):
-    """Envia alerta quando o estado da pista muda. Devolve o novo estado."""
-    estado = dados.get("Status")
-    if estado is None or estado == estado_anterior:
-        return estado_anterior
+def handle_track_status(data, previous_status, quiet=False):
+    """Alert when the track status changes. Returns the new status."""
+    status = data.get("Status")
+    if status is None or status == previous_status:
+        return previous_status
 
-    if not silencioso:
-        alerta = ESTADOS_PISTA.get(str(estado))
-        if alerta:
-            enviar_alerta(alerta)
-    return estado
+    if not quiet:
+        alert = TRACK_STATUS_ALERTS.get(str(status))
+        if alert:
+            send_alert(alert)
+    return status
 
 
-def tratar_race_control(dados, vistas, silencioso=False):
-    mensagens = dados.get("Messages", [])
-    # No snapshot inicial 'Messages' é uma lista; nas actualizações
-    # incrementais vem como dict indexado por posição.
-    if isinstance(mensagens, dict):
-        mensagens = list(mensagens.values())
+def handle_race_control(data, seen, quiet=False):
+    messages = data.get("Messages", [])
+    # In the initial snapshot 'Messages' is a list; in incremental updates it
+    # arrives as a dict keyed by index.
+    if isinstance(messages, dict):
+        messages = list(messages.values())
 
-    for mensagem in mensagens:
-        if not isinstance(mensagem, dict):
+    for message in messages:
+        if not isinstance(message, dict):
             continue
-        texto = (mensagem.get("Message") or "").strip()
-        if not texto or texto in vistas:
-            continue
-
-        # No snapshot inicial basta registar: alertar seria repetir o que já
-        # aconteceu antes de o bot se ligar.
-        if silencioso:
-            vistas.add(texto)
+        text = (message.get("Message") or "").strip()
+        if not text or text in seen:
             continue
 
-        maiusculas = texto.upper()
-        if any(excl in maiusculas for excl in EXCLUSOES_RACE_CONTROL):
-            vistas.add(texto)
+        # On the initial snapshot, just record it: alerting would replay what
+        # happened before the bot connected.
+        if quiet:
+            seen.add(text)
             continue
 
-        for padrao, etiqueta in FILTROS_RACE_CONTROL:
-            if padrao in maiusculas:
-                enviar_alerta(f"*{etiqueta}:* {texto}")
-                vistas.add(texto)
+        upper = text.upper()
+        if any(exclusion in upper for exclusion in RACE_CONTROL_EXCLUSIONS):
+            seen.add(text)
+            continue
+
+        for pattern, label in RACE_CONTROL_FILTERS:
+            if pattern in upper:
+                send_alert(f"*{label}:* {text}")
+                seen.add(text)
                 break
 
 
-def iniciar_cliente():
-    """Mantém a ligação viva: o SignalRClient do FastF1 não se religa sozinho.
+def run_client():
+    """Keep the connection alive: FastF1's SignalRClient does not reconnect.
 
-    Abre em modo 'a' para que uma religação não trunque o que já foi escrito
-    e desalinhe o monitor.
+    Opens in 'a' mode so that a reconnect cannot truncate what was already
+    written and desynchronize the monitor.
     """
-    tentativa = 0
+    attempt = 0
     while True:
-        tentativa += 1
-        print(f"A ligar aos servidores da F1 (tentativa {tentativa})...")
+        attempt += 1
+        print(f"Connecting to the F1 servers (attempt {attempt})...")
         try:
             SignalRClient(
-                str(FICHEIRO_DADOS), filemode="a", timeout=TIMEOUT_CLIENTE
+                str(DATA_FILE), filemode="a", timeout=CLIENT_TIMEOUT
             ).start()
-            print("Ligação terminada pelo servidor.", file=sys.stderr)
-        except Exception as erro:
-            print(f"ERRO no cliente FastF1: {erro}", file=sys.stderr)
-        print(f"A religar dentro de {ESPERA_RELIGAR}s...")
-        time.sleep(ESPERA_RELIGAR)
+            print("Connection closed by the server.", file=sys.stderr)
+        except Exception as error:
+            print(f"ERROR in the FastF1 client: {error}", file=sys.stderr)
+        print(f"Reconnecting in {RECONNECT_DELAY}s...")
+        time.sleep(RECONNECT_DELAY)
 
 
-def esperar_ficheiro(thread_cliente):
-    limite = time.time() + ARRANQUE_TIMEOUT
-    while not FICHEIRO_DADOS.exists():
-        if not thread_cliente.is_alive():
+def wait_for_file(client_thread):
+    deadline = time.time() + STARTUP_TIMEOUT
+    while not DATA_FILE.exists():
+        if not client_thread.is_alive():
             raise RuntimeError(
-                "O cliente FastF1 terminou no arranque. Verifica a "
-                "autenticação F1TV."
+                "The FastF1 client died on startup. Check F1TV authentication."
             )
-        if time.time() > limite:
+        if time.time() > deadline:
             raise RuntimeError(
-                f"{FICHEIRO_DADOS} não apareceu em {ARRANQUE_TIMEOUT}s."
+                f"{DATA_FILE} did not appear within {STARTUP_TIMEOUT}s."
             )
         time.sleep(1)
 
 
-def seguir_ficheiro(thread_cliente):
-    """Segue o ficheiro linha a linha e dispara os alertas."""
-    estado_pista = None
-    vistas = set()
-    topicos_vistos = set()
-    parcial = ""
-    ultimo_dado = time.time()
-    ultimo_aviso = 0.0
+def follow_file(client_thread):
+    """Tail the file line by line and fire the alerts."""
+    track_status = None
+    seen = set()
+    topics_seen = set()
+    partial = ""
+    last_data = time.time()
+    last_warning = 0.0
 
-    with FICHEIRO_DADOS.open("r", encoding="utf-8") as ficheiro:
-        ficheiro.seek(0, os.SEEK_END)
+    with DATA_FILE.open("r", encoding="utf-8") as handle:
+        handle.seek(0, os.SEEK_END)
 
         while True:
-            pedaco = ficheiro.readline()
+            chunk = handle.readline()
 
-            if not pedaco:
-                if not thread_cliente.is_alive():
+            if not chunk:
+                if not client_thread.is_alive():
                     print(
-                        "A thread do cliente FastF1 morreu. A terminar.",
+                        "The FastF1 client thread died. Shutting down.",
                         file=sys.stderr,
                     )
                     return 1
 
-                agora = time.time()
-                if (agora - ultimo_dado > AVISO_SEM_DADOS
-                        and agora - ultimo_aviso > AVISO_SEM_DADOS):
-                    minutos = int((agora - ultimo_dado) // 60)
+                now = time.time()
+                if (now - last_data > STALL_WARNING
+                        and now - last_warning > STALL_WARNING):
+                    minutes = int((now - last_data) // 60)
                     print(
-                        f"Aviso: sem dados novos há {minutos} minutos. "
-                        "A sessão pode ter terminado ou a ligação caiu.",
+                        f"Warning: no new data for {minutes} minutes. "
+                        "The session may have ended or the connection dropped.",
                         file=sys.stderr,
                     )
-                    ultimo_aviso = agora
+                    last_warning = now
 
-                time.sleep(INTERVALO_LEITURA)
+                time.sleep(READ_INTERVAL)
                 continue
 
-            # readline() pode devolver uma linha ainda a ser escrita.
-            parcial += pedaco
-            if not parcial.endswith("\n"):
+            # readline() can return a line that is still being written.
+            partial += chunk
+            if not partial.endswith("\n"):
                 continue
-            linha, parcial = parcial, ""
+            line, partial = partial, ""
 
-            ultimo_dado = time.time()
+            last_data = time.time()
 
-            topico, dados = analisar_linha(linha)
-            if topico is None:
+            topic, data = parse_line(line)
+            if topic is None:
                 continue
 
-            # O primeiro registo de cada tópico é o snapshot com o histórico
-            # da sessão até ao momento da ligação. Serve para inicializar o
-            # estado, não para alertar retroactivamente.
-            snapshot = topico not in topicos_vistos
-            topicos_vistos.add(topico)
+            # The first record of each topic is the snapshot holding the
+            # session history up to connection time. It primes the state; it
+            # must not alert retroactively.
+            snapshot = topic not in topics_seen
+            topics_seen.add(topic)
 
-            if topico == "TrackStatus":
-                estado_pista = tratar_track_status(dados, estado_pista, snapshot)
-            elif topico == "RaceControlMessages":
-                tratar_race_control(dados, vistas, snapshot)
+            if topic == "TrackStatus":
+                track_status = handle_track_status(data, track_status, snapshot)
+            elif topic == "RaceControlMessages":
+                handle_race_control(data, seen, snapshot)
 
 
 def main():
-    whatsapp.validar_config()
-    preparar_ficheiros()
+    whatsapp.validate_config()
+    rotate_capture()
 
-    thread_cliente = threading.Thread(target=iniciar_cliente, daemon=True)
-    thread_cliente.start()
+    client_thread = threading.Thread(target=run_client, daemon=True)
+    client_thread.start()
 
-    print("A aguardar dados do FastF1...")
-    esperar_ficheiro(thread_cliente)
+    print("Waiting for data from FastF1...")
+    wait_for_file(client_thread)
 
-    print("A monitorizar a sessão. Ctrl+C para terminar.")
-    return seguir_ficheiro(thread_cliente)
+    print("Monitoring the session. Ctrl+C to stop.")
+    return follow_file(client_thread)
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
     except KeyboardInterrupt:
-        print("\nTerminado.")
+        print("\nStopped.")
         sys.exit(0)
-    except Exception as erro:
-        print(f"ERRO: {erro}", file=sys.stderr)
+    except Exception as error:
+        print(f"ERROR: {error}", file=sys.stderr)
         sys.exit(1)
