@@ -1,76 +1,80 @@
-import os
-from dotenv import load_dotenv
-import requests
-from datetime import datetime, timezone
+"""Envia o calendário do fim de semana de GP para o grupo de WhatsApp.
+
+Sai com 0 quando não há nada a enviar e com 1 em caso de erro, para que o
+GitHub Actions marque a execução como falhada e notifique. Antes, qualquer
+falha ficava escondida num job verde.
+"""
+
+import sys
 import zoneinfo
+from datetime import datetime, timezone
 
-load_dotenv()
+import f1_api
+import whatsapp
 
-id_instance = os.getenv("ID_INSTANCE")
-api_token = os.getenv("API_TOKEN")
-chat_id = os.getenv("CHAT_ID")
-host = "https://7107.api.greenapi.com"
+LISBOA = zoneinfo.ZoneInfo("Europe/Lisbon")
+JANELA_DIAS = 7
+LINK_STREAM = "https://formula1streams.plus/"
 
-f1_url = "https://api.jolpi.ca/ergast/f1/current/next.json"
-lisbon_tz = zoneinfo.ZoneInfo("Europe/Lisbon")
 
 def converter_hora(data_str, hora_str):
-    dt_utc = datetime.strptime(f"{data_str}T{hora_str}", "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-    dt_local = dt_utc.astimezone(lisbon_tz)
-    return dt_local.strftime("%d/%m (%H:%M)")
+    """Converte data e hora UTC da API para hora de Lisboa."""
+    dt_utc = datetime.strptime(
+        f"{data_str}T{hora_str}", "%Y-%m-%dT%H:%M:%SZ"
+    ).replace(tzinfo=timezone.utc)
+    return dt_utc.astimezone(LISBOA).strftime("%d/%m (%H:%M)")
 
-try:
-    response = requests.get(f1_url, timeout=10)
-    response.raise_for_status()
 
-    race = response.json()['MRData']['RaceTable']['Races'][0]
-    race_name = race['raceName']
-    race_date_str = race['date']
-    
-    now = datetime.now(lisbon_tz).date()
-    race_date = datetime.strptime(race_date_str, "%Y-%m-%d").date()
-    
-    days_until_race = (race_date - now).days
-    
-    if not (0 <= days_until_race <= 7):
-        print(f"Next race is in {days_until_race} days. No message sent")
-        exit()
+def linha_sessao(corrida, chave, etiqueta):
+    """Linha formatada de uma sessão, ou vazia se o fim de semana não a tiver."""
+    sessao = corrida.get(chave)
+    if not sessao:
+        return ""
+    return f"*{etiqueta}:* {converter_hora(sessao['date'], sessao['time'])}\n"
 
-    message = f"*{race_name}*\n\n"
-    
-    if 'FirstPractice' in race:
-        message += f"*Treino 1:* {converter_hora(race['FirstPractice']['date'], race['FirstPractice']['time'])}\n"
-    if 'SprintQualifying' in race:
-        message += f"*Qualificação Sprint:* {converter_hora(race['SprintQualifying']['date'], race['SprintQualifying']['time'])}\n"
-    elif 'SecondPractice' in race:
-        message += f"*Treino 2:* {converter_hora(race['SecondPractice']['date'], race['SecondPractice']['time'])}\n"
-    if 'Sprint' in race:
-        message += f"*Sprint:* {converter_hora(race['Sprint']['date'], race['Sprint']['time'])}\n"
-    elif 'ThirdPractice' in race:
-        message += f"*Treino 3:* {converter_hora(race['ThirdPractice']['date'], race['ThirdPractice']['time'])}\n"
-    if 'Qualifying' in race:
-        message += f"*Qualificação:* {converter_hora(race['Qualifying']['date'], race['Qualifying']['time'])}\n"
-        
-    message += f"*Corrida:* {converter_hora(race['date'], race['time'])}\n\n*Assiste em:* https://formula1streams.plus/"
 
-    send_url = f"{host}/waInstance{id_instance}/sendMessage/{api_token}"
-    payload = {"chatId": chat_id, "message": message}
-    resp = requests.post(send_url, json=payload, timeout=10)
-    
-    if resp.status_code == 200:
-        id_mensagem = resp.json().get("idMessage")
-        print("Message sent")
+def construir_mensagem(corrida):
+    mensagem = f"*{corrida['raceName']}*\n\n"
+    mensagem += linha_sessao(corrida, "FirstPractice", "Treino 1")
 
-        pin_url = f"{host}/waInstance{id_instance}/pinMessage/{api_token}"
-        pin_payload = {"chatId": chat_id, "idMessage": id_mensagem, "pin": True, "pinType": "pinForEveryone"}
-        pin_resp = requests.post(pin_url, json=pin_payload, timeout=10)
-        
-        if pin_resp.status_code == 200:
-            print("Message pinned in the group")
-        else:
-            print(f"Could not pin the message. Error: {pin_resp.text}")
+    # Num fim de semana sprint, as sessões de sprint ocupam o lugar do T2/T3.
+    if "SprintQualifying" in corrida:
+        mensagem += linha_sessao(corrida, "SprintQualifying", "Qualificação Sprint")
     else:
-        print(f"Error: {resp.text}")
+        mensagem += linha_sessao(corrida, "SecondPractice", "Treino 2")
 
-except Exception as e:
-    print(f"Error: {e}")
+    if "Sprint" in corrida:
+        mensagem += linha_sessao(corrida, "Sprint", "Sprint")
+    else:
+        mensagem += linha_sessao(corrida, "ThirdPractice", "Treino 3")
+
+    mensagem += linha_sessao(corrida, "Qualifying", "Qualificação")
+    mensagem += f"*Corrida:* {converter_hora(corrida['date'], corrida['time'])}\n\n"
+    mensagem += f"*Assiste em:* {LINK_STREAM}"
+    return mensagem
+
+
+def main():
+    whatsapp.validar_config()
+
+    corrida = f1_api.proxima_corrida()
+    data_corrida = datetime.strptime(corrida["date"], "%Y-%m-%d").date()
+    dias = (data_corrida - datetime.now(LISBOA).date()).days
+
+    if not 0 <= dias <= JANELA_DIAS:
+        print(
+            f"Próxima corrida ({corrida['raceName']}) é daqui a {dias} dias. "
+            "Nada a enviar."
+        )
+        return 0
+
+    whatsapp.enviar_e_fixar(construir_mensagem(corrida))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as erro:
+        print(f"ERRO: {erro}", file=sys.stderr)
+        sys.exit(1)

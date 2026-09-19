@@ -2,7 +2,11 @@ name: F1 Grid WhatsApp Bot
 
 on:
   schedule:
-    - cron: '0 17 * * 6'
+    # De hora a hora, de sexta a domingo. A hora da qualificação varia muito
+    # entre GPs (Las Vegas ~04:00 UTC, Bahrein ~16:00) e em fins de semana
+    # sprint cai à sexta, por isso uma janela fixa não chega. O script sai
+    # de imediato quando não há nada a fazer.
+    - cron: '0 * * * 5,6,0'
   workflow_dispatch:
 
 jobs:
@@ -17,6 +21,16 @@ jobs:
         with:
           python-version: '3.10'
 
+      # Guarda que rondas já foram enviadas, para que as execuções seguintes
+      # do mesmo fim de semana não repitam a mensagem. Se a cache expirar, o
+      # pior caso é um duplicado.
+      - name: Restaurar estado de envios
+        uses: actions/cache/restore@v4
+        with:
+          path: .state
+          key: grid-estado-${{ github.run_id }}
+          restore-keys: grid-estado-
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -28,3 +42,12 @@ jobs:
           API_TOKEN: ${{ secrets.API_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python grid_bot.py
+
+      # Corre mesmo em falha: se a mensagem chegou a sair antes do erro, o
+      # estado tem de ser preservado para não haver duplicado à hora seguinte.
+      - name: Guardar estado de envios
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .state
+          key: grid-estado-${{ github.run_id }}

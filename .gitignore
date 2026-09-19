@@ -1,3 +1,6 @@
 .vscode/
 .env
 f1_live.txt
+f1_live.prev.txt
+.state/
+__pycache__/
