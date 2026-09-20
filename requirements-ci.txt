@@ -1,0 +1,7 @@
+# Dependencies for the scheduled bots (calendar_bot, grid_bot) only.
+# fastf1 is deliberately absent: only live_bot needs it, and live_bot never
+# runs in CI. Installing it here pulled pandas, numpy and matplotlib into
+# every scheduled run for nothing.
+# For local development install requirements.txt instead, which covers all three.
+requests
+python-dotenv

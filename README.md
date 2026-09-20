@@ -28,7 +28,8 @@ F1BOT/
 ├── calendar_bot.py
 ├── grid_bot.py
 ├── live_bot.py
-├── requirements.txt
+├── requirements.txt         # Everything, for local development
+├── requirements-ci.txt      # Scheduled bots only (no fastf1)
 └── README.md
 ```
 
@@ -85,6 +86,11 @@ Configure the following variables locally in a `.env` file or securely under Git
    ```bash
    pip install -r requirements.txt
    ```
+
+   The GitHub Actions workflows install `requirements-ci.txt` instead, which
+   omits FastF1: only the live bot needs it, and the live bot never runs in
+   CI. Pulling in pandas and numpy was taking 26 of every scheduled run's 31
+   seconds.
 
 3. Run the live bot locally:
    ```bash

@@ -2,52 +2,60 @@ name: F1 Grid WhatsApp Bot
 
 on:
   schedule:
-    # De hora a hora, de sexta a domingo. A hora da qualificação varia muito
-    # entre GPs (Las Vegas ~04:00 UTC, Bahrein ~16:00) e em fins de semana
-    # sprint cai à sexta, por isso uma janela fixa não chega. O script sai
-    # de imediato quando não há nada a fazer.
-    - cron: '0 * * * 5,6,0'
+    # Hourly, Friday through Sunday. Qualifying times vary widely between
+    # Grands Prix (Las Vegas ~04:00 UTC, Bahrain ~16:00) and on sprint
+    # weekends it falls on Friday, so a fixed slot is not enough. The script
+    # exits immediately when there is nothing to do.
+    #
+    # Minute 17, not 0: GitHub drops scheduled runs under load and the top of
+    # the hour is the most contended slot. Observed on 2026-09-20 with minute
+    # 0, roughly four of twenty-four hourly runs actually fired. Even so,
+    # delivery is never guaranteed — expect the grid within a few hours of
+    # qualifying, not within the hour.
+    - cron: '17 * * * 5,6,0'
   workflow_dispatch:
 
 jobs:
   run-grid-bot:
     runs-on: ubuntu-latest
     steps:
-      - name: Aceder ao repositório
+      - name: Check out the repository
         uses: actions/checkout@v4
 
-      - name: Configurar Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # Guarda que rondas já foram enviadas, para que as execuções seguintes
-      # do mesmo fim de semana não repitam a mensagem. Se a cache expirar, o
-      # pior caso é um duplicado.
-      - name: Restaurar estado de envios
+      # Carries over which rounds were already sent, so the later runs of the
+      # same weekend do not repeat the message. If the cache expires, the
+      # worst case is a duplicate.
+      - name: Restore send state
         uses: actions/cache/restore@v4
         with:
           path: .state
-          key: grid-estado-${{ github.run_id }}
-          restore-keys: grid-estado-
+          key: grid-state-${{ github.run_id }}
+          restore-keys: grid-state-
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-ci.txt
 
-      - name: Executar o bot da grelha
+      - name: Run the grid bot
         env:
           ID_INSTANCE: ${{ secrets.ID_INSTANCE }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python grid_bot.py
 
-      # Corre mesmo em falha: se a mensagem chegou a sair antes do erro, o
-      # estado tem de ser preservado para não haver duplicado à hora seguinte.
-      - name: Guardar estado de envios
-        if: always()
+      # Runs even on failure: if the message went out before the error, the
+      # state must be preserved so the next hour does not send a duplicate.
+      # Skipped when no state file exists — most runs send nothing, and
+      # actions/cache/save warns loudly when asked to save a missing path.
+      - name: Save send state
+        if: always() && hashFiles('.state/grid_sent.json') != ''
         uses: actions/cache/save@v4
         with:
           path: .state
-          key: grid-estado-${{ github.run_id }}
+          key: grid-state-${{ github.run_id }}
