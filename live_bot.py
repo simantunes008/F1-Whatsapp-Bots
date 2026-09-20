@@ -57,6 +57,10 @@ STARTUP_TIMEOUT = 120
 # so it is widened here.
 CLIENT_TIMEOUT = int(os.getenv("FASTF1_TIMEOUT", "600"))
 STALL_WARNING = 300
+# Consecutive client failures before giving up during startup. Two is enough
+# to tell a bad token from a blip, and reports in ~30s instead of waiting out
+# STARTUP_TIMEOUT.
+STARTUP_FAILURES_ALLOWED = 2
 
 
 def rotate_capture():
@@ -156,7 +160,27 @@ def handle_race_control(data, seen, quiet=False):
                 break
 
 
-def run_client():
+class ClientStatus:
+    """What the client thread reports back to the monitor.
+
+    The thread retries forever, so it never dies and its health cannot be
+    inferred from `Thread.is_alive()`. Failures have to be published here
+    instead.
+    """
+
+    def __init__(self):
+        self.failures = 0
+        self.last_error = None
+
+    def record_failure(self, error):
+        self.failures += 1
+        self.last_error = error
+
+    def record_success(self):
+        self.failures = 0
+
+
+def run_client(status):
     """Keep the connection alive: FastF1's SignalRClient does not reconnect.
 
     Opens in 'a' mode so that a reconnect cannot truncate what was already
@@ -170,28 +194,32 @@ def run_client():
             SignalRClient(
                 str(DATA_FILE), filemode="a", timeout=CLIENT_TIMEOUT
             ).start()
+            status.record_success()
             print("Connection closed by the server.", file=sys.stderr)
         except Exception as error:
+            status.record_failure(error)
             print(f"ERROR in the FastF1 client: {error}", file=sys.stderr)
         print(f"Reconnecting in {RECONNECT_DELAY}s...")
         time.sleep(RECONNECT_DELAY)
 
 
-def wait_for_file(client_thread):
+def wait_for_file(status):
     deadline = time.time() + STARTUP_TIMEOUT
     while not DATA_FILE.exists():
-        if not client_thread.is_alive():
+        if status.failures >= STARTUP_FAILURES_ALLOWED:
             raise RuntimeError(
-                "The FastF1 client died on startup. Check F1TV authentication."
+                f"The FastF1 client failed {status.failures} times in a row: "
+                f"{status.last_error}. Check the F1TV authentication."
             )
         if time.time() > deadline:
             raise RuntimeError(
-                f"{DATA_FILE} did not appear within {STARTUP_TIMEOUT}s."
+                f"{DATA_FILE} did not appear within {STARTUP_TIMEOUT}s, and "
+                "the client reported no error. The session may not be live."
             )
         time.sleep(1)
 
 
-def follow_file(client_thread):
+def follow_file(status):
     """Tail the file line by line and fire the alerts."""
     track_status = None
     seen = set()
@@ -207,20 +235,18 @@ def follow_file(client_thread):
             chunk = handle.readline()
 
             if not chunk:
-                if not client_thread.is_alive():
-                    print(
-                        "The FastF1 client thread died. Shutting down.",
-                        file=sys.stderr,
-                    )
-                    return 1
-
                 now = time.time()
                 if (now - last_data > STALL_WARNING
                         and now - last_warning > STALL_WARNING):
                     minutes = int((now - last_data) // 60)
+                    detail = (
+                        f" Last client error: {status.last_error}"
+                        if status.failures else ""
+                    )
                     print(
                         f"Warning: no new data for {minutes} minutes. "
-                        "The session may have ended or the connection dropped.",
+                        f"The session may have ended or the connection "
+                        f"dropped.{detail}",
                         file=sys.stderr,
                     )
                     last_warning = now
@@ -256,14 +282,14 @@ def main():
     whatsapp.validate_config()
     rotate_capture()
 
-    client_thread = threading.Thread(target=run_client, daemon=True)
-    client_thread.start()
+    status = ClientStatus()
+    threading.Thread(target=run_client, args=(status,), daemon=True).start()
 
     print("Waiting for data from FastF1...")
-    wait_for_file(client_thread)
+    wait_for_file(status)
 
     print("Monitoring the session. Ctrl+C to stop.")
-    return follow_file(client_thread)
+    return follow_file(status)
 
 
 if __name__ == "__main__":
